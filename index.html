@@ -2154,3 +2154,551 @@ function formatNumber(
 
 </body>
 </html>
+# ============================================================
+# WALK-FORWARD FORECAST + BESS OPTIMISER BENCHMARK
+# Paste this AFTER your existing optimiser code
+# ============================================================
+
+import numpy as np
+import pandas as pd
+
+
+# ------------------------------------------------------------
+# 1. FORECAST TOMORROW USING ONLY HISTORICAL INFORMATION
+# ------------------------------------------------------------
+
+def forecast_next_day(history):
+    """
+    Forecast the next 24 hourly prices.
+
+    Uses a weighted combination of:
+      - yesterday's prices
+      - same weekday from one week earlier
+      - recent historical average
+
+    IMPORTANT:
+    No future prices are used.
+    """
+
+    history = history.copy()
+
+    history["timestamp"] = pd.to_datetime(history["timestamp"])
+    history = history.sort_values("timestamp")
+
+    history["hour"] = history["timestamp"].dt.hour
+    history["dow"] = history["timestamp"].dt.dayofweek
+
+    forecasts = []
+
+    last_timestamp = history["timestamp"].iloc[-1]
+    forecast_date = last_timestamp.normalize() + pd.Timedelta(days=1)
+
+    for hour in range(24):
+
+        target = forecast_date + pd.Timedelta(hours=hour)
+
+        # ----------------------------------------------------
+        # Yesterday's price for this hour
+        # ----------------------------------------------------
+
+        yesterday_time = target - pd.Timedelta(days=1)
+
+        yesterday = history[
+            history["timestamp"] == yesterday_time
+        ]["price"]
+
+        yesterday_price = (
+            yesterday.iloc[0]
+            if len(yesterday)
+            else np.nan
+        )
+
+        # ----------------------------------------------------
+        # Same weekday, one week earlier
+        # ----------------------------------------------------
+
+        week_time = target - pd.Timedelta(days=7)
+
+        week = history[
+            history["timestamp"] == week_time
+        ]["price"]
+
+        week_price = (
+            week.iloc[0]
+            if len(week)
+            else np.nan
+        )
+
+        # ----------------------------------------------------
+        # Recent average for this hour
+        # ----------------------------------------------------
+
+        hour_history = history[
+            history["hour"] == hour
+        ].tail(14)
+
+        recent_mean = (
+            hour_history["price"].mean()
+            if len(hour_history)
+            else history["price"].mean()
+        )
+
+        # ----------------------------------------------------
+        # Weighted forecast
+        # ----------------------------------------------------
+
+        components = []
+        weights = []
+
+        if not np.isnan(yesterday_price):
+            components.append(yesterday_price)
+            weights.append(0.45)
+
+        if not np.isnan(week_price):
+            components.append(week_price)
+            weights.append(0.40)
+
+        components.append(recent_mean)
+        weights.append(0.15)
+
+        forecast_price = np.average(
+            components,
+            weights=weights
+        )
+
+        forecasts.append({
+            "timestamp": target,
+            "price": forecast_price
+        })
+
+    return pd.DataFrame(forecasts)
+
+
+# ------------------------------------------------------------
+# 2. SIMPLE ARBITRAGE OPTIMISER
+# ------------------------------------------------------------
+
+def optimise_forecast(
+    prices,
+    power_mw=100,
+    energy_mwh=200,
+    efficiency=0.90,
+    initial_soc=None
+):
+    """
+    Optimises energy arbitrage using ONLY the supplied
+    forecast prices.
+
+    Returns a 24-hour dispatch schedule.
+    """
+
+    prices = np.asarray(prices, dtype=float)
+
+    n = len(prices)
+
+    if initial_soc is None:
+        initial_soc = energy_mwh * 0.5
+
+    soc = initial_soc
+
+    charge = np.zeros(n)
+    discharge = np.zeros(n)
+    soc_path = np.zeros(n)
+    revenue = np.zeros(n)
+
+    # --------------------------------------------------------
+    # Rank hours by forecast price
+    # --------------------------------------------------------
+
+    cheap_hours = np.argsort(prices)
+    expensive_hours = np.argsort(prices)[::-1]
+
+    used_charge = set()
+    used_discharge = set()
+
+    # Maximum one full equivalent cycle per day
+    remaining_energy = energy_mwh
+
+    # --------------------------------------------------------
+    # Greedy forecast-based dispatch
+    # --------------------------------------------------------
+
+    for buy_hour in cheap_hours:
+
+        if remaining_energy <= 0:
+            break
+
+        for sell_hour in expensive_hours:
+
+            if sell_hour <= buy_hour:
+                continue
+
+            if sell_hour in used_discharge:
+                continue
+
+            if buy_hour in used_charge:
+                continue
+
+            spread = prices[sell_hour] - prices[buy_hour]
+
+            if spread <= 0:
+                continue
+
+            charge_energy = min(
+                power_mw,
+                energy_mwh - soc,
+                remaining_energy
+            )
+
+            if charge_energy <= 0:
+                continue
+
+            discharge_energy = (
+                charge_energy * efficiency
+            )
+
+            discharge_energy = min(
+                discharge_energy,
+                power_mw,
+                energy_mwh
+            )
+
+            charge[buy_hour] = charge_energy
+            discharge[sell_hour] = discharge_energy
+
+            soc += charge_energy * efficiency
+            soc -= discharge_energy
+
+            used_charge.add(buy_hour)
+            used_discharge.add(sell_hour)
+
+            remaining_energy -= charge_energy
+
+            break
+
+    # --------------------------------------------------------
+    # Calculate SOC and revenue properly
+    # --------------------------------------------------------
+
+    soc = initial_soc
+
+    for i in range(n):
+
+        # Charging costs money
+        if charge[i] > 0:
+
+            energy_into_battery = (
+                charge[i] * efficiency
+            )
+
+            soc += energy_into_battery
+
+            revenue[i] -= (
+                charge[i] * prices[i]
+            )
+
+        # Discharging generates revenue
+        if discharge[i] > 0:
+
+            soc -= discharge[i]
+
+            revenue[i] += (
+                discharge[i] * prices[i]
+            )
+
+        soc = max(
+            0,
+            min(energy_mwh, soc)
+        )
+
+        soc_path[i] = soc
+
+    result = pd.DataFrame({
+        "price_forecast": prices,
+        "charge_mw": charge,
+        "discharge_mw": discharge,
+        "soc_mwh": soc_path,
+        "forecast_revenue": revenue
+    })
+
+    return result
+
+
+# ------------------------------------------------------------
+# 3. PERFECT-FORESIGHT BENCHMARK
+# ------------------------------------------------------------
+
+def perfect_foresight_day(
+    actual_prices,
+    power_mw=100,
+    energy_mwh=200,
+    efficiency=0.90
+):
+    """
+    Runs the same optimiser with the ACTUAL future prices.
+
+    This represents the theoretical perfect-foresight ceiling.
+    """
+
+    result = optimise_forecast(
+        actual_prices,
+        power_mw=power_mw,
+        energy_mwh=energy_mwh,
+        efficiency=efficiency
+    )
+
+    return result["forecast_revenue"].sum()
+
+
+# ------------------------------------------------------------
+# 4. WALK-FORWARD BACKTEST
+# ------------------------------------------------------------
+
+def walk_forward_backtest(
+    data,
+    power_mw=100,
+    energy_mwh=200,
+    efficiency=0.90,
+    minimum_history_days=14
+):
+    """
+    Walk-forward simulation.
+
+    At each day:
+
+        historical data
+              ↓
+        forecast tomorrow
+              ↓
+        optimise forecast
+              ↓
+        execute against ACTUAL tomorrow prices
+
+    Future prices are never exposed to the forecast.
+    """
+
+    data = data.copy()
+
+    data["timestamp"] = pd.to_datetime(
+        data["timestamp"]
+    )
+
+    data = data.sort_values(
+        "timestamp"
+    ).reset_index(drop=True)
+
+    data = data.dropna(
+        subset=["price"]
+    )
+
+    dates = (
+        data["timestamp"]
+        .dt.normalize()
+        .drop_duplicates()
+        .sort_values()
+    )
+
+    all_results = []
+
+    start_index = minimum_history_days
+
+    for date in dates[start_index:]:
+
+        history = data[
+            data["timestamp"] < date
+        ]
+
+        actual_day = data[
+            data["timestamp"].dt.normalize() == date
+        ]
+
+        if len(actual_day) != 24:
+            continue
+
+        # ----------------------------------------------------
+        # Forecast
+        # ----------------------------------------------------
+
+        forecast = forecast_next_day(history)
+
+        if len(forecast) != 24:
+            continue
+
+        # ----------------------------------------------------
+        # Forecast-driven optimisation
+        # ----------------------------------------------------
+
+        forecast_dispatch = optimise_forecast(
+            forecast["price"].values,
+            power_mw=power_mw,
+            energy_mwh=energy_mwh,
+            efficiency=efficiency
+        )
+
+        # ----------------------------------------------------
+        # Execute that dispatch against ACTUAL prices
+        # ----------------------------------------------------
+
+        actual_prices = actual_day[
+            "price"
+        ].values
+
+        forecast_dispatch["actual_price"] = actual_prices
+
+        actual_revenue = (
+            -forecast_dispatch["charge_mw"]
+            * actual_prices
+            +
+            forecast_dispatch["discharge_mw"]
+            * actual_prices
+        )
+
+        forecast_dispatch[
+            "actual_revenue"
+        ] = actual_revenue
+
+        forecast_profit = actual_revenue.sum()
+
+        # ----------------------------------------------------
+        # Perfect foresight
+        # ----------------------------------------------------
+
+        perfect_profit = perfect_foresight_day(
+            actual_prices,
+            power_mw=power_mw,
+            energy_mwh=energy_mwh,
+            efficiency=efficiency
+        )
+
+        all_results.append({
+            "date": date,
+            "forecast_profit": forecast_profit,
+            "perfect_profit": perfect_profit
+        })
+
+    results = pd.DataFrame(all_results)
+
+    if len(results) == 0:
+        raise ValueError(
+            "Not enough historical data for walk-forward test."
+        )
+
+    # --------------------------------------------------------
+    # Aggregate metrics
+    # --------------------------------------------------------
+
+    forecast_total = results[
+        "forecast_profit"
+    ].sum()
+
+    perfect_total = results[
+        "perfect_profit"
+    ].sum()
+
+    capture = (
+        forecast_total / perfect_total
+        if perfect_total != 0
+        else np.nan
+    )
+
+    results["cumulative_forecast_profit"] = (
+        results["forecast_profit"].cumsum()
+    )
+
+    results["cumulative_perfect_profit"] = (
+        results["perfect_profit"].cumsum()
+    )
+
+    print()
+    print("=" * 60)
+    print("WALK-FORWARD BESS BACKTEST")
+    print("=" * 60)
+
+    print(
+        f"Forecast-driven profit: "
+        f"€{forecast_total:,.2f}"
+    )
+
+    print(
+        f"Perfect-foresight profit: "
+        f"€{perfect_total:,.2f}"
+    )
+
+    print(
+        f"Revenue capture / PoP: "
+        f"{capture * 100:.2f}%"
+    )
+
+    print(
+        f"Forecast profit / MW: "
+        f"€{forecast_total / power_mw:,.2f}"
+    )
+
+    print(
+        f"Perfect profit / MW: "
+        f"€{perfect_total / power_mw:,.2f}"
+    )
+
+    print("=" * 60)
+
+    return results
+
+
+# ------------------------------------------------------------
+# 5. RUN IT ON YOUR CSV
+# ------------------------------------------------------------
+
+def run_forecast_backtest(
+    csv_file,
+    power_mw=100,
+    energy_mwh=200,
+    efficiency=0.90
+):
+
+    data = pd.read_csv(csv_file)
+
+    required = {
+        "timestamp",
+        "price"
+    }
+
+    missing = required - set(data.columns)
+
+    if missing:
+        raise ValueError(
+            f"CSV is missing columns: {missing}"
+        )
+
+    results = walk_forward_backtest(
+        data,
+        power_mw=power_mw,
+        energy_mwh=energy_mwh,
+        efficiency=efficiency
+    )
+
+    results.to_csv(
+        "bess_forecast_backtest_results.csv",
+        index=False
+    )
+
+    print()
+    print(
+        "Saved results to "
+        "bess_forecast_backtest_results.csv"
+    )
+
+    return results
+
+
+# ============================================================
+# EXAMPLE
+# ============================================================
+
+# Change this filename to your CSV:
+#
+# results = run_forecast_backtest(
+#     "bess_fake_2025_full_year.csv",
+#     power_mw=100,
+#     energy_mwh=200,
+#     efficiency=0.90
+# )
