@@ -1,0 +1,2156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>BESS Energy Arbitrage Optimiser</title>
+
+<style>
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #f4f6f8;
+        color: #17212b;
+    }
+
+    .container {
+        max-width: 1200px;
+        margin: auto;
+        padding: 30px;
+    }
+
+    h1 {
+        margin-bottom: 5px;
+    }
+
+    .subtitle {
+        color: #66727e;
+        margin-bottom: 25px;
+    }
+
+    .card {
+        background: white;
+        border: 1px solid #dce2e7;
+        border-radius: 14px;
+        padding: 22px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    .card h2 {
+        margin-top: 0;
+    }
+
+    .upload {
+        border: 2px dashed #aeb8c2;
+        border-radius: 12px;
+        padding: 35px;
+        text-align: center;
+    }
+
+    input,
+    select,
+    button {
+        width: 100%;
+        padding: 10px;
+        margin-top: 5px;
+        border-radius: 8px;
+        border: 1px solid #c6ced6;
+        font-size: 14px;
+    }
+
+    button {
+        background: #17212b;
+        color: white;
+        border: none;
+        cursor: pointer;
+        font-weight: bold;
+    }
+
+    button:hover {
+        opacity: 0.9;
+    }
+
+    .grid {
+        display: grid;
+        grid-template-columns:
+            repeat(auto-fit, minmax(180px, 1fr));
+        gap: 15px;
+    }
+
+    label {
+        display: block;
+        font-size: 13px;
+        font-weight: bold;
+    }
+
+    .metrics {
+        display: grid;
+        grid-template-columns:
+            repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+    }
+
+    .metric {
+        background: #f5f7f9;
+        border-radius: 10px;
+        padding: 15px;
+    }
+
+    .metric-title {
+        font-size: 13px;
+        color: #687582;
+    }
+
+    .metric-value {
+        font-size: 21px;
+        font-weight: bold;
+        margin-top: 6px;
+    }
+
+    canvas {
+        width: 100%;
+        height: 330px;
+        border: 1px solid #e0e5e9;
+        border-radius: 10px;
+    }
+
+    .hidden {
+        display: none;
+    }
+
+    #error {
+        color: #a40000;
+        font-weight: bold;
+    }
+
+    #status {
+        color: #176b3a;
+        font-weight: bold;
+    }
+
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 12px;
+    }
+
+    th,
+    td {
+        padding: 7px;
+        border-bottom: 1px solid #e5e9ed;
+        text-align: right;
+    }
+
+    th:first-child,
+    td:first-child {
+        text-align: left;
+    }
+
+    .warning {
+        background: #fff7df;
+        border: 1px solid #ead38a;
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 13px;
+    }
+
+    code {
+        background: #eef1f4;
+        padding: 2px 5px;
+        border-radius: 4px;
+    }
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>BESS Energy-Arbitrage Optimiser</h1>
+
+    <div class="subtitle">
+        Upload historical electricity prices and optimise battery
+        charging/discharging based only on energy-price arbitrage.
+    </div>
+
+
+    <!-- CSV -->
+
+    <div class="card">
+
+        <h2>1. Import price data</h2>
+
+        <div class="upload">
+
+            <input
+                type="file"
+                id="csvFile"
+                accept=".csv"
+            >
+
+            <p>
+                Your CSV must contain:
+            </p>
+
+            <p>
+                <code>timestamp,price</code>
+            </p>
+
+            <p>
+                Example:
+            </p>
+
+            <pre>timestamp,price
+2026-01-01 00:00,82.4
+2026-01-01 01:00,75.2
+2026-01-01 02:00,68.7</pre>
+
+        </div>
+
+        <p id="status"></p>
+
+    </div>
+
+
+    <!-- BATTERY -->
+
+    <div class="card">
+
+        <h2>2. Battery parameters</h2>
+
+        <div class="grid">
+
+            <div>
+                <label>
+                    Battery power (MW)
+                    <input
+                        id="power"
+                        type="number"
+                        value="100"
+                        step="1"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Battery capacity (MWh)
+                    <input
+                        id="capacity"
+                        type="number"
+                        value="200"
+                        step="1"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Charge efficiency
+                    <input
+                        id="chargeEfficiency"
+                        type="number"
+                        value="0.95"
+                        step="0.01"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Discharge efficiency
+                    <input
+                        id="dischargeEfficiency"
+                        type="number"
+                        value="0.95"
+                        step="0.01"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Minimum SOC
+                    <input
+                        id="minSOC"
+                        type="number"
+                        value="0.05"
+                        step="0.01"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Maximum SOC
+                    <input
+                        id="maxSOC"
+                        type="number"
+                        value="0.95"
+                        step="0.01"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Initial SOC
+                    <input
+                        id="initialSOC"
+                        type="number"
+                        value="0.50"
+                        step="0.01"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Degradation cost €/MWh
+                    <input
+                        id="degradation"
+                        type="number"
+                        value="5"
+                        step="0.1"
+                    >
+                </label>
+            </div>
+
+            <div>
+                <label>
+                    Variable O&M €/MWh
+                    <input
+                        id="om"
+                        type="number"
+                        value="0"
+                        step="0.1"
+                    >
+                </label>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- MODE -->
+
+    <div class="card">
+
+        <h2>3. Optimisation mode</h2>
+
+        <div class="grid">
+
+            <div>
+
+                <label>
+                    Mode
+
+                    <select id="mode">
+
+                        <option value="perfect">
+                            Perfect foresight benchmark
+                        </option>
+
+                        <option value="rolling">
+                            Causal rolling backtest
+                        </option>
+
+                    </select>
+
+                </label>
+
+            </div>
+
+            <div>
+
+                <label>
+                    Forecast horizon (hours)
+
+                    <input
+                        id="forecastHorizon"
+                        type="number"
+                        value="24"
+                        min="1"
+                    >
+
+                </label>
+
+            </div>
+
+        </div>
+
+
+        <div class="warning">
+
+            <b>Important:</b>
+
+            Perfect foresight is an upper-bound benchmark.
+            It sees the complete historical price curve.
+
+            The causal rolling mode does not use future realised
+            prices when making its decisions.
+
+        </div>
+
+        <br>
+
+        <button id="runButton">
+            RUN OPTIMISER
+        </button>
+
+        <p id="error"></p>
+
+    </div>
+
+
+    <!-- RESULTS -->
+
+    <div
+        id="results"
+        class="hidden"
+    >
+
+        <div class="card">
+
+            <h2>Results</h2>
+
+            <div
+                class="metrics"
+                id="metrics"
+            ></div>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>Electricity price</h2>
+
+            <canvas id="priceChart"></canvas>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>Battery dispatch</h2>
+
+            <canvas id="dispatchChart"></canvas>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>State of charge</h2>
+
+            <canvas id="socChart"></canvas>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>Export</h2>
+
+            <button id="downloadButton">
+                DOWNLOAD OPTIMISED DISPATCH CSV
+            </button>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>Dispatch data</h2>
+
+            <div style="overflow:auto">
+
+                <table id="resultTable"></table>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+/* ============================================================
+   GLOBAL VARIABLES
+============================================================ */
+
+let priceData = [];
+let optimisationResult = [];
+let downloadableCSV = "";
+
+
+/* ============================================================
+   CSV PARSER
+============================================================ */
+
+function splitCSVLine(line) {
+
+    let result = [];
+    let current = "";
+    let quoted = false;
+
+    for (let i = 0; i < line.length; i++) {
+
+        const c = line[i];
+
+        if (c === '"') {
+            quoted = !quoted;
+        }
+
+        else if (c === "," && !quoted) {
+
+            result.push(current);
+            current = "";
+
+        }
+
+        else {
+
+            current += c;
+
+        }
+
+    }
+
+    result.push(current);
+
+    return result;
+}
+
+
+function parseCSV(text) {
+
+    const lines = text
+        .replace(/\r/g, "")
+        .split("\n")
+        .filter(line => line.trim() !== "");
+
+    if (lines.length < 2) {
+
+        throw new Error(
+            "CSV contains no usable data."
+        );
+
+    }
+
+    const headers =
+        splitCSVLine(lines[0])
+        .map(x => x.trim().toLowerCase());
+
+    const timestampIndex =
+        headers.indexOf("timestamp");
+
+    const priceIndex =
+        headers.indexOf("price");
+
+    if (
+        timestampIndex === -1 ||
+        priceIndex === -1
+    ) {
+
+        throw new Error(
+            "CSV must contain timestamp and price columns."
+        );
+
+    }
+
+    const output = [];
+
+    for (let i = 1; i < lines.length; i++) {
+
+        const row =
+            splitCSVLine(lines[i]);
+
+        const timestamp =
+            new Date(row[timestampIndex]);
+
+        const price =
+            Number(row[priceIndex]);
+
+        if (
+            !Number.isNaN(timestamp.getTime()) &&
+            Number.isFinite(price)
+        ) {
+
+            output.push({
+
+                timestamp: timestamp,
+
+                price: price
+
+            });
+
+        }
+
+    }
+
+    output.sort(
+        (a,b) =>
+            a.timestamp - b.timestamp
+    );
+
+    return output;
+}
+
+
+/* ============================================================
+   FILE IMPORT
+============================================================ */
+
+document
+    .getElementById("csvFile")
+    .addEventListener(
+        "change",
+        async function(event) {
+
+            const file =
+                event.target.files[0];
+
+            if (!file) return;
+
+            try {
+
+                const text =
+                    await file.text();
+
+                priceData =
+                    parseCSV(text);
+
+                document
+                    .getElementById("status")
+                    .textContent =
+                    "Loaded " +
+                    priceData.length.toLocaleString() +
+                    " price observations.";
+
+            }
+
+            catch(error) {
+
+                document
+                    .getElementById("status")
+                    .textContent =
+                    error.message;
+
+            }
+
+        }
+    );
+
+
+/* ============================================================
+   TIME STEP
+============================================================ */
+
+function calculateTimeStep(data) {
+
+    const differences = [];
+
+    for (
+        let i = 1;
+        i < data.length;
+        i++
+    ) {
+
+        const hours =
+            (
+                data[i].timestamp -
+                data[i-1].timestamp
+            ) / 3600000;
+
+        if (hours > 0) {
+
+            differences.push(hours);
+
+        }
+
+    }
+
+    differences.sort(
+        (a,b) => a-b
+    );
+
+    return differences[
+        Math.floor(
+            differences.length / 2
+        )
+    ] || 1;
+
+}
+
+
+/* ============================================================
+   PERFECT FORESIGHT OPTIMISER
+============================================================ */
+
+/*
+   Dynamic programming implementation.
+
+   The optimiser maximises:
+
+   Σ(price × discharge
+     - price × charge
+     - degradation
+     - O&M)
+
+   subject to:
+
+   SOC limits
+   charge power limit
+   discharge power limit
+   round-trip efficiency
+   initial SOC
+   terminal SOC
+*/
+
+
+function optimisePerfectForesight(
+    data,
+    battery,
+    dt
+) {
+
+    const steps =
+        Math.max(
+            80,
+            Math.min(
+                300,
+                Math.round(
+                    battery.capacity
+                )
+            )
+        );
+
+    const minEnergy =
+        battery.minSOC *
+        battery.capacity;
+
+    const maxEnergy =
+        battery.maxSOC *
+        battery.capacity;
+
+    const energyStep =
+        (
+            maxEnergy -
+            minEnergy
+        ) / (steps - 1);
+
+
+    let previous =
+        new Float64Array(steps);
+
+    previous.fill(-Infinity);
+
+
+    const initialIndex =
+        Math.round(
+            (
+                battery.initialSOC *
+                battery.capacity -
+                minEnergy
+            ) /
+            energyStep
+        );
+
+
+    previous[initialIndex] = 0;
+
+
+    const parentStates = [];
+    const actions = [];
+
+
+    /*
+       Forward dynamic programme
+    */
+
+    for (
+        let t = 0;
+        t < data.length;
+        t++
+    ) {
+
+        const current =
+            new Float64Array(steps);
+
+        current.fill(-Infinity);
+
+
+        const parent =
+            new Int32Array(steps);
+
+        parent.fill(-1);
+
+
+        const action =
+            new Float64Array(steps);
+
+
+        for (
+            let previousState = 0;
+            previousState < steps;
+            previousState++
+        ) {
+
+            if (
+                previous[previousState] ===
+                -Infinity
+            ) {
+
+                continue;
+
+            }
+
+
+            const currentEnergy =
+                minEnergy +
+                previousState *
+                energyStep;
+
+
+            for (
+                let newState = 0;
+                newState < steps;
+                newState++
+            ) {
+
+                const newEnergy =
+                    minEnergy +
+                    newState *
+                    energyStep;
+
+
+                const delta =
+                    newEnergy -
+                    currentEnergy;
+
+
+                let chargeEnergy = 0;
+                let dischargeEnergy = 0;
+
+
+                if (delta >= 0) {
+
+                    chargeEnergy =
+                        delta /
+                        battery.chargeEfficiency;
+
+                }
+
+                else {
+
+                    dischargeEnergy =
+                        -delta *
+                        battery.dischargeEfficiency;
+
+                }
+
+
+                /*
+                   Power constraint
+                */
+
+                if (
+                    chargeEnergy >
+                    battery.power *
+                    dt
+                ) {
+
+                    continue;
+
+                }
+
+
+                if (
+                    dischargeEnergy >
+                    battery.power *
+                    dt
+                ) {
+
+                    continue;
+
+                }
+
+
+                const throughput =
+                    chargeEnergy +
+                    dischargeEnergy;
+
+
+                const profit =
+                    data[t].price *
+                    (
+                        dischargeEnergy -
+                        chargeEnergy
+                    )
+                    -
+                    (
+                        battery.degradation +
+                        battery.om
+                    ) *
+                    throughput;
+
+
+                const value =
+                    previous[previousState] +
+                    profit;
+
+
+                if (
+                    value >
+                    current[newState]
+                ) {
+
+                    current[newState] =
+                        value;
+
+                    parent[newState] =
+                        previousState;
+
+                    action[newState] =
+                        chargeEnergy -
+                        dischargeEnergy;
+
+                }
+
+            }
+
+        }
+
+
+        previous = current;
+
+        parentStates.push(parent);
+
+        actions.push(action);
+
+    }
+
+
+    /*
+       Terminal SOC = initial SOC
+    */
+
+    let finalState =
+        initialIndex;
+
+
+    /*
+       If exact terminal state isn't
+       reachable, use best available.
+    */
+
+    if (
+        previous[finalState] ===
+        -Infinity
+    ) {
+
+        finalState = 0;
+
+        for (
+            let i = 1;
+            i < steps;
+            i++
+        ) {
+
+            if (
+                previous[i] >
+                previous[finalState]
+            ) {
+
+                finalState = i;
+
+            }
+
+        }
+
+    }
+
+
+    /*
+       Backtrack
+    */
+
+    const states =
+        new Int32Array(data.length);
+
+    let state =
+        finalState;
+
+
+    for (
+        let t = data.length - 1;
+        t >= 0;
+        t--
+    ) {
+
+        states[t] = state;
+
+        state =
+            parentStates[t][state];
+
+    }
+
+
+    /*
+       Convert states to dispatch
+    */
+
+    let soc =
+        battery.initialSOC *
+        battery.capacity;
+
+
+    const result = [];
+
+
+    for (
+        let t = 0;
+        t < data.length;
+        t++
+    ) {
+
+        const netEnergy =
+            actions[t][states[t]];
+
+
+        const chargeMW =
+            Math.max(
+                0,
+                netEnergy
+            ) / dt;
+
+
+        const dischargeMW =
+            Math.max(
+                0,
+                -netEnergy
+            ) / dt;
+
+
+        const startingSOC =
+            soc;
+
+
+        soc +=
+            chargeMW *
+            dt *
+            battery.chargeEfficiency;
+
+
+        soc -=
+            dischargeMW *
+            dt /
+            battery.dischargeEfficiency;
+
+
+        const chargingCost =
+            data[t].price *
+            chargeMW *
+            dt;
+
+
+        const dischargeRevenue =
+            data[t].price *
+            dischargeMW *
+            dt;
+
+
+        const throughput =
+            (
+                chargeMW +
+                dischargeMW
+            ) * dt;
+
+
+        const degradationCost =
+            (
+                battery.degradation +
+                battery.om
+            ) *
+            throughput;
+
+
+        const netProfit =
+            dischargeRevenue -
+            chargingCost -
+            degradationCost;
+
+
+        result.push({
+
+            timestamp:
+                data[t].timestamp,
+
+            price:
+                data[t].price,
+
+            chargeMW:
+                chargeMW,
+
+            dischargeMW:
+                dischargeMW,
+
+            socStart:
+                startingSOC,
+
+            socEnd:
+                soc,
+
+            grossRevenue:
+                dischargeRevenue,
+
+            chargingCost:
+                chargingCost,
+
+            degradationCost:
+                degradationCost,
+
+            netProfit:
+                netProfit
+
+        });
+
+    }
+
+
+    return result;
+
+}
+
+
+/* ============================================================
+   CAUSAL ROLLING OPTIMISER
+============================================================ */
+
+/*
+   At time t the optimiser does NOT know future realised prices.
+
+   Forecast:
+
+   same hour from previous seven observations.
+
+   It then optimises against that forecast.
+
+   Only the first dispatch interval is actually executed.
+
+   Then the process repeats.
+*/
+
+
+function optimiseRolling(
+    data,
+    battery,
+    dt,
+    horizonHours
+) {
+
+    const result = [];
+
+    let soc =
+        battery.initialSOC *
+        battery.capacity;
+
+
+    const horizonSteps =
+        Math.max(
+            1,
+            Math.round(
+                horizonHours / dt
+            )
+        );
+
+
+    /*
+       Need historical observations
+       for the first forecast.
+    */
+
+    for (
+        let t = 24;
+        t < data.length;
+        t++
+    ) {
+
+        const forecast = [];
+
+
+        const numberOfSteps =
+            Math.min(
+                horizonSteps,
+                data.length - t
+            );
+
+
+        for (
+            let k = 0;
+            k < numberOfSteps;
+            k++
+        ) {
+
+            const targetHour =
+                data[
+                    t + k
+                ]
+                .timestamp
+                .getHours();
+
+
+            const historical =
+                data
+                    .slice(0,t)
+                    .filter(
+                        x =>
+                            x.timestamp.getHours() ===
+                            targetHour
+                    )
+                    .slice(-7);
+
+
+            let forecastPrice;
+
+
+            if (
+                historical.length > 0
+            ) {
+
+                forecastPrice =
+                    historical.reduce(
+                        (sum,x) =>
+                            sum + x.price,
+                        0
+                    ) /
+                    historical.length;
+
+            }
+
+            else {
+
+                forecastPrice =
+                    data[t-1].price;
+
+            }
+
+
+            forecast.push({
+
+                timestamp:
+                    data[t+k].timestamp,
+
+                price:
+                    forecastPrice
+
+            });
+
+        }
+
+
+        /*
+           Optimise forecast.
+
+           Only first action is used.
+        */
+
+        const forecastBattery = {
+
+            ...battery,
+
+            initialSOC:
+                soc /
+                battery.capacity
+
+        };
+
+
+        const forecastPlan =
+            optimisePerfectForesight(
+                forecast,
+                forecastBattery,
+                dt
+            );
+
+
+        const action =
+            forecastPlan[0];
+
+
+        const chargeMW =
+            action.chargeMW;
+
+
+        const dischargeMW =
+            action.dischargeMW;
+
+
+        const startingSOC =
+            soc;
+
+
+        soc +=
+            chargeMW *
+            dt *
+            battery.chargeEfficiency;
+
+
+        soc -=
+            dischargeMW *
+            dt /
+            battery.dischargeEfficiency;
+
+
+        const chargingCost =
+            data[t].price *
+            chargeMW *
+            dt;
+
+
+        const dischargeRevenue =
+            data[t].price *
+            dischargeMW *
+            dt;
+
+
+        const throughput =
+            (
+                chargeMW +
+                dischargeMW
+            ) * dt;
+
+
+        const degradationCost =
+            (
+                battery.degradation +
+                battery.om
+            ) *
+            throughput;
+
+
+        const netProfit =
+            dischargeRevenue -
+            chargingCost -
+            degradationCost;
+
+
+        result.push({
+
+            timestamp:
+                data[t].timestamp,
+
+            price:
+                data[t].price,
+
+            chargeMW:
+                chargeMW,
+
+            dischargeMW:
+                dischargeMW,
+
+            socStart:
+                startingSOC,
+
+            socEnd:
+                soc,
+
+            grossRevenue:
+                dischargeRevenue,
+
+            chargingCost:
+                chargingCost,
+
+            degradationCost:
+                degradationCost,
+
+            netProfit:
+                netProfit
+
+        });
+
+    }
+
+
+    return result;
+
+}
+
+
+/* ============================================================
+   RUN
+============================================================ */
+
+document
+    .getElementById("runButton")
+    .addEventListener(
+        "click",
+        function() {
+
+            try {
+
+                document
+                    .getElementById("error")
+                    .textContent = "";
+
+
+                if (
+                    priceData.length < 2
+                ) {
+
+                    throw new Error(
+                        "Import a CSV first."
+                    );
+
+                }
+
+
+                const battery = {
+
+                    power:
+                        Number(
+                            document
+                                .getElementById("power")
+                                .value
+                        ),
+
+                    capacity:
+                        Number(
+                            document
+                                .getElementById("capacity")
+                                .value
+                        ),
+
+                    chargeEfficiency:
+                        Number(
+                            document
+                                .getElementById(
+                                    "chargeEfficiency"
+                                )
+                                .value
+                        ),
+
+                    dischargeEfficiency:
+                        Number(
+                            document
+                                .getElementById(
+                                    "dischargeEfficiency"
+                                )
+                                .value
+                        ),
+
+                    minSOC:
+                        Number(
+                            document
+                                .getElementById(
+                                    "minSOC"
+                                )
+                                .value
+                        ),
+
+                    maxSOC:
+                        Number(
+                            document
+                                .getElementById(
+                                    "maxSOC"
+                                )
+                                .value
+                        ),
+
+                    initialSOC:
+                        Number(
+                            document
+                                .getElementById(
+                                    "initialSOC"
+                                )
+                                .value
+                        ),
+
+                    degradation:
+                        Number(
+                            document
+                                .getElementById(
+                                    "degradation"
+                                )
+                                .value
+                        ),
+
+                    om:
+                        Number(
+                            document
+                                .getElementById(
+                                    "om"
+                                )
+                                .value
+                        )
+
+                };
+
+
+                if (
+                    battery.power <= 0 ||
+                    battery.capacity <= 0
+                ) {
+
+                    throw new Error(
+                        "Power and capacity must be positive."
+                    );
+
+                }
+
+
+                if (
+                    battery.minSOC < 0 ||
+                    battery.maxSOC > 1 ||
+                    battery.minSOC >
+                    battery.maxSOC
+                ) {
+
+                    throw new Error(
+                        "Invalid SOC limits."
+                    );
+
+                }
+
+
+                const dt =
+                    calculateTimeStep(
+                        priceData
+                    );
+
+
+                const mode =
+                    document
+                        .getElementById(
+                            "mode"
+                        )
+                        .value;
+
+
+                if (
+                    mode === "perfect"
+                ) {
+
+                    optimisationResult =
+                        optimisePerfectForesight(
+                            priceData,
+                            battery,
+                            dt
+                        );
+
+                }
+
+                else {
+
+                    optimisationResult =
+                        optimiseRolling(
+                            priceData,
+                            battery,
+                            dt,
+                            Number(
+                                document
+                                    .getElementById(
+                                        "forecastHorizon"
+                                    )
+                                    .value
+                            )
+                        );
+
+                }
+
+
+                displayResults(
+                    optimisationResult,
+                    battery,
+                    dt
+                );
+
+            }
+
+            catch(error) {
+
+                document
+                    .getElementById("error")
+                    .textContent =
+                    error.message;
+
+                console.error(error);
+
+            }
+
+        }
+    );
+
+
+/* ============================================================
+   RESULTS
+============================================================ */
+
+function displayResults(
+    result,
+    battery,
+    dt
+) {
+
+    document
+        .getElementById("results")
+        .classList
+        .remove("hidden");
+
+
+    let netProfit = 0;
+    let grossRevenue = 0;
+    let chargingCost = 0;
+    let degradationCost = 0;
+    let throughput = 0;
+
+
+    for (
+        const row of result
+    ) {
+
+        netProfit +=
+            row.netProfit;
+
+        grossRevenue +=
+            row.grossRevenue;
+
+        chargingCost +=
+            row.chargingCost;
+
+        degradationCost +=
+            row.degradationCost;
+
+        throughput +=
+            (
+                row.chargeMW +
+                row.dischargeMW
+            ) * dt;
+
+    }
+
+
+    const cycles =
+        throughput /
+        (
+            2 *
+            battery.capacity
+        );
+
+
+    const metrics = [
+
+        [
+            "Net profit",
+            formatEuro(netProfit)
+        ],
+
+        [
+            "Gross discharge revenue",
+            formatEuro(grossRevenue)
+        ],
+
+        [
+            "Charging cost",
+            formatEuro(chargingCost)
+        ],
+
+        [
+            "Degradation + O&M",
+            formatEuro(degradationCost)
+        ],
+
+        [
+            "Energy throughput",
+            formatNumber(throughput) +
+            " MWh"
+        ],
+
+        [
+            "Equivalent full cycles",
+            formatNumber(cycles)
+        ]
+
+    ];
+
+
+    document
+        .getElementById("metrics")
+        .innerHTML =
+        metrics
+            .map(
+                item => `
+                    <div class="metric">
+
+                        <div class="metric-title">
+                            ${item[0]}
+                        </div>
+
+                        <div class="metric-value">
+                            ${item[1]}
+                        </div>
+
+                    </div>
+                `
+            )
+            .join("");
+
+
+    drawChart(
+        "priceChart",
+        result.map(x => x.price)
+    );
+
+
+    drawChart(
+        "dispatchChart",
+        result.map(
+            x =>
+                x.chargeMW -
+                x.dischargeMW
+        )
+    );
+
+
+    drawChart(
+        "socChart",
+        result.map(
+            x => x.socEnd
+        )
+    );
+
+
+    createTable(result);
+
+    createDownloadCSV(result);
+
+}
+
+
+/* ============================================================
+   SIMPLE CHART ENGINE
+============================================================ */
+
+function drawChart(
+    canvasId,
+    values
+) {
+
+    const canvas =
+        document.getElementById(
+            canvasId
+        );
+
+
+    const ctx =
+        canvas.getContext(
+            "2d"
+        );
+
+
+    const ratio =
+        window.devicePixelRatio ||
+        1;
+
+
+    const width =
+        canvas.clientWidth;
+
+    const height =
+        canvas.clientHeight;
+
+
+    canvas.width =
+        width * ratio;
+
+    canvas.height =
+        height * ratio;
+
+
+    ctx.scale(
+        ratio,
+        ratio
+    );
+
+
+    const left = 55;
+    const right = 15;
+    const top = 20;
+    const bottom = 30;
+
+
+    const chartWidth =
+        width -
+        left -
+        right;
+
+
+    const chartHeight =
+        height -
+        top -
+        bottom;
+
+
+    let min =
+        Math.min(
+            ...values
+        );
+
+    let max =
+        Math.max(
+            ...values
+        );
+
+
+    if (min === max) {
+
+        max =
+            min + 1;
+
+    }
+
+
+    ctx.strokeStyle =
+        "#d8dee4";
+
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        left,
+        top
+    );
+
+    ctx.lineTo(
+        left,
+        top + chartHeight
+    );
+
+    ctx.lineTo(
+        left + chartWidth,
+        top + chartHeight
+    );
+
+    ctx.stroke();
+
+
+    ctx.strokeStyle =
+        "#17212b";
+
+    ctx.lineWidth = 1.5;
+
+
+    ctx.beginPath();
+
+
+    values.forEach(
+        (value,index) => {
+
+            const x =
+                left +
+                (
+                    index /
+                    (values.length - 1)
+                ) *
+                chartWidth;
+
+
+            const y =
+                top +
+                chartHeight -
+                (
+                    (
+                        value -
+                        min
+                    ) /
+                    (
+                        max -
+                        min
+                    )
+                ) *
+                chartHeight;
+
+
+            if (
+                index === 0
+            ) {
+
+                ctx.moveTo(
+                    x,
+                    y
+                );
+
+            }
+
+            else {
+
+                ctx.lineTo(
+                    x,
+                    y
+                );
+
+            }
+
+        }
+    );
+
+
+    ctx.stroke();
+
+}
+
+
+/* ============================================================
+   TABLE
+============================================================ */
+
+function createTable(result) {
+
+    const columns = [
+
+        "timestamp",
+        "price",
+        "chargeMW",
+        "dischargeMW",
+        "socStart",
+        "socEnd",
+        "grossRevenue",
+        "chargingCost",
+        "degradationCost",
+        "netProfit"
+
+    ];
+
+
+    let html =
+        "<tr>" +
+        columns
+            .map(
+                c =>
+                    `<th>${c}</th>`
+            )
+            .join("") +
+        "</tr>";
+
+
+    result
+        .slice(0,100)
+        .forEach(
+            row => {
+
+                html +=
+                    "<tr>" +
+                    columns
+                        .map(
+                            c => {
+
+                                let value =
+                                    row[c];
+
+
+                                if (
+                                    c ===
+                                    "timestamp"
+                                ) {
+
+                                    value =
+                                        value.toISOString();
+
+                                }
+
+                                else {
+
+                                    value =
+                                        Number(
+                                            value
+                                        ).toFixed(2);
+
+                                }
+
+
+                                return `
+                                    <td>
+                                        ${value}
+                                    </td>
+                                `;
+
+                            }
+                        )
+                        .join("") +
+                    "</tr>";
+
+            }
+        );
+
+
+    document
+        .getElementById(
+            "resultTable"
+        )
+        .innerHTML = html;
+
+}
+
+
+/* ============================================================
+   CSV EXPORT
+============================================================ */
+
+function createDownloadCSV(
+    result
+) {
+
+    const columns = [
+
+        "timestamp",
+        "price",
+        "chargeMW",
+        "dischargeMW",
+        "socStart",
+        "socEnd",
+        "grossRevenue",
+        "chargingCost",
+        "degradationCost",
+        "netProfit"
+
+    ];
+
+
+    let csv =
+        columns.join(",") +
+        "\n";
+
+
+    result.forEach(
+        row => {
+
+            csv +=
+                columns
+                    .map(
+                        column => {
+
+                            if (
+                                column ===
+                                "timestamp"
+                            ) {
+
+                                return row[
+                                    column
+                                ].toISOString();
+
+                            }
+
+                            return row[
+                                column
+                            ];
+
+                        }
+                    )
+                    .join(",") +
+                "\n";
+
+        }
+    );
+
+
+    document
+        .getElementById(
+            "downloadButton"
+        )
+        .onclick =
+        function() {
+
+            const blob =
+                new Blob(
+                    [csv],
+                    {
+                        type:
+                            "text/csv"
+                    }
+                );
+
+
+            const url =
+                URL.createObjectURL(
+                    blob
+                );
+
+
+            const link =
+                document.createElement(
+                    "a"
+                );
+
+
+            link.href = url;
+
+            link.download =
+                "bess_optimised_dispatch.csv";
+
+
+            link.click();
+
+
+            URL.revokeObjectURL(
+                url
+            );
+
+        };
+
+}
+
+
+/* ============================================================
+   FORMATTING
+============================================================ */
+
+function formatEuro(
+    value
+) {
+
+    return (
+        "€" +
+        Number(
+            value
+        ).toLocaleString(
+            undefined,
+            {
+                maximumFractionDigits: 0
+            }
+        )
+    );
+
+}
+
+
+function formatNumber(
+    value
+) {
+
+    return Number(
+        value
+    ).toLocaleString(
+        undefined,
+        {
+            maximumFractionDigits: 2
+        }
+    );
+
+}
+
+</script>
+
+</body>
+</html>
